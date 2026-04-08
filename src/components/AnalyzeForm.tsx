@@ -2,24 +2,28 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Upload, Linkedin, Mail, Phone, FileText, Loader2 } from "lucide-react";
+import { Upload, Linkedin, Mail, Phone, FileText, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
+import { parseAndValidateResume, type ResumeValidation } from "@/lib/resumeParser";
 
 const AnalyzeForm = () => {
   const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [parsing, setParsing] = useState(false);
   const [consent, setConsent] = useState(false);
   const [form, setForm] = useState({ linkedin: "", email: "", phone: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [resumeValidation, setResumeValidation] = useState<ResumeValidation | null>(null);
 
   const validate = () => {
     const errs: Record<string, string> = {};
     if (!form.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) errs.email = "Enter a valid email address";
     if (!file) errs.file = "Please upload your resume (PDF or DOCX)";
+    else if (resumeValidation && !resumeValidation.isValid) errs.file = resumeValidation.error || "Invalid resume";
     if (!consent) errs.consent = "You must agree to the privacy policy";
     setErrors(errs);
     return Object.keys(errs).length === 0;
@@ -29,24 +33,44 @@ const AnalyzeForm = () => {
     e.preventDefault();
     if (!validate()) return;
     setLoading(true);
-    // Simulate analysis
     setTimeout(() => {
       navigate("/results/demo");
     }, 2000);
   };
 
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f && f.size > 10 * 1024 * 1024) {
+    if (!f) return;
+
+    // Size check
+    if (f.size > 10 * 1024 * 1024) {
       setErrors(prev => ({ ...prev, file: "File must be under 10 MB" }));
+      setFile(null);
+      setResumeValidation(null);
       return;
     }
-    if (f && !["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].includes(f.type)) {
+
+    // Type check
+    if (!["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].includes(f.type)) {
       setErrors(prev => ({ ...prev, file: "Only PDF and DOCX files are accepted" }));
+      setFile(null);
+      setResumeValidation(null);
       return;
     }
-    setFile(f || null);
+
+    // Set file and start parsing
+    setFile(f);
     setErrors(prev => ({ ...prev, file: "" }));
+    setParsing(true);
+    setResumeValidation(null);
+
+    const result = await parseAndValidateResume(f);
+    setResumeValidation(result);
+    setParsing(false);
+
+    if (!result.isValid) {
+      setErrors(prev => ({ ...prev, file: result.error || "This doesn't appear to be a valid resume." }));
+    }
   };
 
   return (
@@ -125,7 +149,13 @@ const AnalyzeForm = () => {
               </Label>
               <div
                 onClick={() => fileRef.current?.click()}
-                className="border-2 border-dashed border-border/50 rounded-xl p-6 text-center cursor-pointer hover:border-primary/50 transition-colors bg-muted/20"
+                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors bg-muted/20 ${
+                  resumeValidation?.isValid
+                    ? "border-green-500/50 bg-green-500/5"
+                    : errors.file
+                    ? "border-destructive/50 bg-destructive/5"
+                    : "border-border/50 hover:border-primary/50"
+                }`}
               >
                 <input
                   ref={fileRef}
@@ -134,13 +164,31 @@ const AnalyzeForm = () => {
                   onChange={handleFile}
                   className="hidden"
                 />
-                <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-                {file ? (
-                  <p className="text-sm text-primary font-medium">{file.name}</p>
+                {parsing ? (
+                  <>
+                    <Loader2 className="w-8 h-8 mx-auto mb-2 text-primary animate-spin" />
+                    <p className="text-sm text-primary font-medium">Scanning your document…</p>
+                    <p className="text-xs text-muted-foreground mt-1">Checking for resume content</p>
+                  </>
+                ) : resumeValidation?.isValid && file ? (
+                  <>
+                    <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-green-500" />
+                    <p className="text-sm text-primary font-medium">{file.name}</p>
+                    <p className="text-xs text-green-400 mt-1">
+                      ✓ Resume verified — found {resumeValidation.sectionsFound.join(", ")}
+                    </p>
+                  </>
+                ) : file && errors.file ? (
+                  <>
+                    <AlertTriangle className="w-8 h-8 mx-auto mb-2 text-destructive" />
+                    <p className="text-sm text-destructive font-medium">{file.name}</p>
+                    <p className="text-xs text-muted-foreground mt-1">Click to upload a different file</p>
+                  </>
                 ) : (
                   <>
+                    <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">Click to upload PDF or DOCX</p>
-                    <p className="text-xs text-muted-foreground mt-1">Max 10 MB</p>
+                    <p className="text-xs text-muted-foreground mt-1">Max 10 MB · We'll verify it's a real resume</p>
                   </>
                 )}
               </div>
@@ -162,7 +210,7 @@ const AnalyzeForm = () => {
             </div>
             {errors.consent && <p className="text-destructive text-xs ml-6">{errors.consent}</p>}
 
-            <Button variant="hero" size="lg" className="w-full text-base" disabled={loading}>
+            <Button variant="hero" size="lg" className="w-full text-base" disabled={loading || parsing}>
               {loading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
